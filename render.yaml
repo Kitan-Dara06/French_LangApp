@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: french-srs
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+databases:
+  - name: french-srs-db
+    databaseName: french_srs
+    user: french_user

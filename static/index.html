@@ -1,0 +1,229 @@
+<!doctype html>
+<html>
+    <head>
+        <title>French SRS</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 600px;
+                margin: 50px auto;
+                background: #f5f5f5;
+                padding: 20px;
+            }
+            .container {
+                background: white;
+                padding: 30px;
+                border-radius: 10px;
+                box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            }
+            h1 {
+                color: #333;
+                margin-bottom: 30px;
+            }
+            #sentence {
+                font-size: 24px;
+                margin: 20px 0;
+                color: #2c3e50;
+                font-weight: 500;
+            }
+            #translation {
+                font-size: 16px;
+                color: #7f8c8d;
+                font-style: italic;
+                margin-bottom: 20px;
+            }
+            .input-group {
+                margin: 20px 0;
+            }
+            input {
+                font-size: 20px;
+                padding: 12px;
+                width: 250px;
+                border: 2px solid #3498db;
+                border-radius: 5px;
+                margin-right: 10px;
+            }
+            button {
+                font-size: 18px;
+                padding: 12px 30px;
+                background: #3498db;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                margin-right: 10px;
+            }
+            button:hover {
+                background: #2980b9;
+            }
+            button:disabled {
+                background: #95a5a6;
+                cursor: not-allowed;
+            }
+            #nextBtn {
+                background: #27ae60;
+                display: none;
+            }
+            #nextBtn:hover {
+                background: #229954;
+            }
+            .correct {
+                color: #27ae60;
+                font-weight: bold;
+                font-size: 18px;
+                padding: 10px;
+                background: #d5f4e6;
+                border-radius: 5px;
+                margin: 10px 0;
+            }
+            .wrong {
+                color: #e74c3c;
+                font-weight: bold;
+                font-size: 18px;
+                padding: 10px;
+                background: #fadbd8;
+                border-radius: 5px;
+                margin: 10px 0;
+            }
+            #feedback {
+                margin-top: 20px;
+            }
+            .stats {
+                background: #ecf0f1;
+                padding: 15px;
+                border-radius: 5px;
+                margin-bottom: 20px;
+                font-size: 14px;
+                color: #34495e;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🇫🇷 French Cloze Practice</h1>
+
+            <div class="stats">
+                <strong>Session:</strong>
+                <span id="correct-count">0</span> correct •
+                <span id="wrong-count">0</span> wrong
+            </div>
+
+            <div id="sentence"></div>
+            <div id="translation"></div>
+
+            <div class="input-group">
+                <input
+                    type="text"
+                    id="answer"
+                    placeholder="Type answer..."
+                    autofocus
+                />
+                <button id="submitBtn" onclick="submit()">Submit</button>
+                <button id="nextBtn" onclick="loadQuestion()">Next →</button>
+            </div>
+
+            <div id="feedback"></div>
+        </div>
+
+        <script>
+            let currentWordId = null;
+            let correctCount = 0;
+            let wrongCount = 0;
+
+            async function loadQuestion() {
+                // Reset UI
+                document.getElementById("answer").value = "";
+                document.getElementById("feedback").innerHTML = "";
+                document.getElementById("answer").disabled = false;
+                document.getElementById("submitBtn").disabled = false;
+                document.getElementById("submitBtn").style.display =
+                    "inline-block";
+                document.getElementById("nextBtn").style.display = "none";
+                document.getElementById("answer").focus();
+
+                const res = await fetch("/api/next-question");
+                const data = await res.json();
+
+                if (data.message) {
+                    document.getElementById("sentence").innerText =
+                        data.message;
+                    document.getElementById("translation").innerText = "";
+                    return;
+                }
+
+                document.getElementById("sentence").innerText = data.sentence;
+                document.getElementById("translation").innerText =
+                    data.english_translation
+                        ? `"${data.english_translation}"`
+                        : "";
+                currentWordId = data.word_id;
+            }
+
+            async function submit() {
+                const userInput = document
+                    .getElementById("answer")
+                    .value.trim();
+
+                if (!userInput) {
+                    alert("Please type an answer first!");
+                    return;
+                }
+
+                // Disable input after submission
+                document.getElementById("answer").disabled = true;
+                document.getElementById("submitBtn").disabled = true;
+
+                const res = await fetch("/api/submit-answer", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        word_id: currentWordId,
+                        user_input: userInput,
+                    }),
+                });
+
+                const data = await res.json();
+
+                if (data.correct) {
+                    correctCount++;
+                    document.getElementById("correct-count").innerText =
+                        correctCount;
+                    document.getElementById("feedback").innerHTML =
+                        '<div class="correct">✓ Correct!</div>';
+                } else {
+                    wrongCount++;
+                    document.getElementById("wrong-count").innerText =
+                        wrongCount;
+                    document.getElementById("feedback").innerHTML =
+                        `<div class="wrong">✗ Wrong. The answer was: <strong>${data.correct_answer}</strong></div>`;
+                }
+
+                // Show Next button
+                document.getElementById("submitBtn").style.display = "none";
+                document.getElementById("nextBtn").style.display =
+                    "inline-block";
+                document.getElementById("nextBtn").focus();
+            }
+
+            // Allow Enter key to submit or go next
+            document
+                .getElementById("answer")
+                .addEventListener("keypress", function (e) {
+                    if (e.key === "Enter" && !this.disabled) {
+                        submit();
+                    }
+                });
+
+            document
+                .getElementById("nextBtn")
+                .addEventListener("keypress", function (e) {
+                    if (e.key === "Enter") {
+                        loadQuestion();
+                    }
+                });
+
+            // Load first question on page load
+            loadQuestion();
+        </script>
+    </body>
+</html>
