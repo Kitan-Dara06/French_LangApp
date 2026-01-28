@@ -105,7 +105,8 @@
             <div class="stats">
                 <strong>Session:</strong>
                 <span id="correct-count">0</span> correct •
-                <span id="wrong-count">0</span> wrong
+                <span id="wrong-count">0</span> wrong •
+                <span id="question-count">0</span>/20 questions
             </div>
 
             <div id="sentence"></div>
@@ -126,10 +127,35 @@
         </div>
 
         <script>
+            // ========== SESSION TRACKING ==========
+            let sessionId = localStorage.getItem("current_session");
+            if (!sessionId) {
+                sessionId = generateUUID();
+                localStorage.setItem("current_session", sessionId);
+                console.log("New session started:", sessionId);
+            }
+
+            // ========== STATE VARIABLES ==========
             let currentWordId = null;
+            let currentSentenceId = null;
+            let questionStartTime = null;
             let correctCount = 0;
             let wrongCount = 0;
+            let questionCount = 0;
 
+            // ========== UUID GENERATOR ==========
+            function generateUUID() {
+                return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
+                    /[xy]/g,
+                    function (c) {
+                        const r = (Math.random() * 16) | 0;
+                        const v = c == "x" ? r : (r & 0x3) | 0x8;
+                        return v.toString(16);
+                    },
+                );
+            }
+
+            // ========== LOAD QUESTION ==========
             async function loadQuestion() {
                 // Reset UI
                 document.getElementById("answer").value = "";
@@ -151,14 +177,24 @@
                     return;
                 }
 
+                // Store question data
+                currentSentenceId = data.sentence_id;
+                currentWordId = data.word_id;
+                questionStartTime = Date.now();
+
+                // Update UI
                 document.getElementById("sentence").innerText = data.sentence;
                 document.getElementById("translation").innerText =
                     data.english_translation
                         ? `"${data.english_translation}"`
                         : "";
-                currentWordId = data.word_id;
+
+                questionCount++;
+                document.getElementById("question-count").innerText =
+                    questionCount;
             }
 
+            // ========== SUBMIT ANSWER ==========
             async function submit() {
                 const userInput = document
                     .getElementById("answer")
@@ -169,6 +205,9 @@
                     return;
                 }
 
+                // Calculate response time
+                const responseTime = Date.now() - questionStartTime;
+
                 // Disable input after submission
                 document.getElementById("answer").disabled = true;
                 document.getElementById("submitBtn").disabled = true;
@@ -178,7 +217,10 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         word_id: currentWordId,
+                        sentence_id: currentSentenceId,
                         user_input: userInput,
+                        response_time_ms: responseTime,
+                        session_id: sessionId,
                     }),
                 });
 
@@ -203,9 +245,74 @@
                 document.getElementById("nextBtn").style.display =
                     "inline-block";
                 document.getElementById("nextBtn").focus();
+
+                // Check if session is complete (20 questions)
+                if (questionCount >= 20) {
+                    setTimeout(() => showSessionSummary(), 2000);
+                }
             }
 
-            // Allow Enter key to submit or go next
+            // ========== SHOW SESSION SUMMARY ==========
+            async function showSessionSummary() {
+                const res = await fetch(`/api/session-summary/${sessionId}`);
+                const summary = await res.json();
+
+                // Build summary HTML
+                const summaryHTML = `
+                    <div style="margin-top: 40px; padding: 30px; background: #f8f9fa; border-radius: 10px;">
+                        <h2 style="color: #2c3e50; margin-bottom: 20px;">📊 What Changed Today?</h2>
+
+                        <div style="font-size: 20px; font-weight: bold; color: #34495e; margin-bottom: 30px;">
+                            ${summary.headline}
+                        </div>
+
+                        ${
+                            summary.strengths && summary.strengths.length > 0
+                                ? `
+                            <h3 style="color: #27ae60;">✅ What Got Stronger</h3>
+                            <ul>
+                                ${summary.strengths.map((s) => `<li>${s.word}: ${s.accuracy} correct</li>`).join("")}
+                            </ul>
+                        `
+                                : ""
+                        }
+
+                        ${
+                            summary.weaknesses && summary.weaknesses.length > 0
+                                ? `
+                            <h3 style="color: #e74c3c;">⚠️ What's Still Unstable</h3>
+                            <ul>
+                                ${summary.weaknesses.map((w) => `<li>${w.word}: ${w.pattern} (${w.count} errors)</li>`).join("")}
+                            </ul>
+                        `
+                                : ""
+                        }
+
+                        <h3 style="color: #9b59b6;">💡 Linguistic Insight</h3>
+                        <p style="font-style: italic; background: white; padding: 15px; border-radius: 5px;">
+                            ${summary.insight}
+                        </p>
+
+                        <p style="margin-top: 20px; font-weight: bold;">
+                            ${summary.next_focus}
+                        </p>
+
+                        <button onclick="startNewSession()" style="margin-top: 20px; font-size: 16px;">
+                            Start New Session
+                        </button>
+                    </div>
+                `;
+
+                document.querySelector(".container").innerHTML += summaryHTML;
+            }
+
+            // ========== START NEW SESSION ==========
+            function startNewSession() {
+                localStorage.removeItem("current_session");
+                location.reload();
+            }
+
+            // ========== EVENT LISTENERS ==========
             document
                 .getElementById("answer")
                 .addEventListener("keypress", function (e) {
@@ -222,7 +329,7 @@
                     }
                 });
 
-            // Load first question on page load
+            // ========== INITIALIZE ==========
             loadQuestion();
         </script>
     </body>

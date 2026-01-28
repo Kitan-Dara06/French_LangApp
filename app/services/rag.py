@@ -18,7 +18,6 @@ from app.models.sentence import Sentence
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -38,6 +37,7 @@ def semantic_search(db: Session, query_text: str, top_k: int = 5) -> List[Senten
     except Exception as e:
         print(f"Error generating query embedding: {e}")
         return []
+
     try:
         # Use pgvector's cosine distance for similarity search
         results = (
@@ -46,7 +46,6 @@ def semantic_search(db: Session, query_text: str, top_k: int = 5) -> List[Senten
             .limit(top_k)
             .all()
         )
-
         return results
     except Exception as e:
         print(f"Error during DB search: {e}")
@@ -54,6 +53,7 @@ def semantic_search(db: Session, query_text: str, top_k: int = 5) -> List[Senten
 
 
 def retrieve_context(db: Session, word_text: str, top_k: int = 5) -> List[Sentence]:
+    """Retrieve contextually similar sentences for a given word."""
     search_query = f"sentences using the French word {word_text}"
     return semantic_search(db, search_query, top_k=top_k)
 
@@ -68,16 +68,17 @@ def generate_sentences_with_rag(
     3. GENERATE: Create new sentences at appropriate difficulty
 
     Args:
+        db: Database session
         word_text: The French word (e.g., "aller")
         word_pos: Part of speech (e.g., "VERB")
         count: Number of sentences to generate
+        top_k: Number of similar sentences to retrieve
 
     Returns:
         List of dicts: [{'sentence': '...', 'blanked': '...', 'tense': '...'}]
     """
-    search_query = f"sentences using the French word {word_text}"
 
-    relevant_sentences = retrieve_context(db, search_query, top_k=top_k)
+    relevant_sentences = retrieve_context(db, word_text, top_k=top_k)
 
     if not relevant_sentences:
         print(
@@ -96,8 +97,7 @@ def generate_sentences_with_rag(
     print(f"✅ RAG: Found {len(relevant_sentences)} similar sentences for context")
 
     # --- PHASE 2: AUGMENTED PROMPT ---
-    prompt = f"""
-Role: You are a French language tutor creating practice exercises.
+    prompt = f"""Role: You are a French language tutor creating practice exercises.
 
 Task: Generate {count} French sentences using the word "{word_text}" ({word_pos}).
 
@@ -120,21 +120,19 @@ Output Format (JSON):
   {{"sentence": "Tu es allé au marché", "tense": "passé composé"}}
 ]
 
-Output ONLY the JSON array, no explanation.
-"""
+Output ONLY the JSON array, no explanation."""
 
     # --- PHASE 3: GENERATION ---
     try:
         response = client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-4o-mini",  # ← FIXED
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=100,
-            temperature=0.5,
+            max_tokens=500,
+            temperature=0.7,
         )
 
-        # Parse the JSON response
-
         response_text = response.choices[0].message.content.strip()
+
         # Try to extract JSON from markdown if needed
         json_match = re.search(r"\[.*\]", response_text, re.DOTALL)
         if json_match:
@@ -146,8 +144,10 @@ Output ONLY the JSON array, no explanation.
         results = []
         for item in sentences_data:
             sentence = item["sentence"]
-            # Simple blanking: replace the target word
-            blanked = sentence.replace(word_text, "___", 1)
+            # Simple blanking: replace the target word (case-insensitive)
+            blanked = re.sub(
+                re.escape(word_text), "___", sentence, count=1, flags=re.IGNORECASE
+            )
 
             results.append(
                 {
@@ -160,18 +160,23 @@ Output ONLY the JSON array, no explanation.
         print(f"✅ RAG: Generated {len(results)} contextually appropriate sentences")
         return results
 
+    except json.JSONDecodeError as e:
+        print(f"❌ RAG JSON parsing error: {e}")
+        print(f"Response was: {response_text[:200]}")
+        return generate_basic_sentences(word_text, word_pos, count)
     except Exception as e:
         print(f"❌ RAG generation error: {e}")
         return generate_basic_sentences(word_text, word_pos, count)
 
 
-def generate_basic_sentences(word_text: str, word_pos: str, count: int = 5):
+def generate_basic_sentences(
+    word_text: str, word_pos: str, count: int = 5
+) -> List[Dict]:
     """
     Fallback: Generate sentences without RAG context.
     Used when vector store is unavailable.
     """
-    prompt = f"""
-Generate {count} simple French sentences (A1-A2 level) using the word "{word_text}" ({word_pos}).
+    prompt = f"""Generate {count} simple French sentences (A1-A2 level) using the word "{word_text}" ({word_pos}).
 
 If it's a verb, vary the tense (présent, passé composé, futur).
 Keep sentences short and natural.
@@ -182,18 +187,19 @@ Output Format (JSON):
   {{"sentence": "Tu es allé au marché", "tense": "passé composé"}}
 ]
 
-Output ONLY the JSON array.
-"""
+Output ONLY the JSON array, no explanation."""
 
     try:
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=prompt,
-            max_output_tokens=100,
-            temperature=0.5,
+        response = client.chat.completions.create(  # ← FIXED
+            model="gpt-4o-mini",  # ← FIXED
+            messages=[{"role": "user", "content": prompt}],  # ← FIXED
+            max_tokens=500,
+            temperature=0.7,
         )
 
-        response_text = response.output_text.strip()
+        response_text = response.choices[0].message.content.strip()  # ← FIXED
+
+        # Extract JSON from markdown if present
         json_match = re.search(r"\[.*\]", response_text, re.DOTALL)
         if json_match:
             response_text = json_match.group()
@@ -203,7 +209,9 @@ Output ONLY the JSON array.
         results = []
         for item in sentences_data:
             sentence = item["sentence"]
-            blanked = sentence.replace(word_text, "___", 1)
+            blanked = re.sub(
+                re.escape(word_text), "___", sentence, count=1, flags=re.IGNORECASE
+            )
 
             results.append(
                 {
@@ -213,8 +221,13 @@ Output ONLY the JSON array.
                 }
             )
 
+        print(f"✅ Basic generation: Generated {len(results)} sentences")
         return results
 
+    except json.JSONDecodeError as e:
+        print(f"❌ Basic generation JSON error: {e}")
+        print(f"Response was: {response_text[:200]}")
+        return []
     except Exception as e:
         print(f"❌ Basic generation error: {e}")
         return []
